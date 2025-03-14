@@ -248,6 +248,10 @@ Nenhuma transacção deve depender de algo que ainda não foi committed. Só se 
 
 ![Wait-for-Graphs](./img/11.png)
 
+---
+
+## 03. Introduction to Transaction Processing - Conflicts and Anomalies - 24Fev2025 
+
 ### Conflict Types and the Anomalies they lead to
 
 - **Write-Write (WW) conflict**
@@ -340,9 +344,367 @@ Nenhuma transacção deve depender de algo que ainda não foi committed. Só se 
 - PostgreSQL também pode usar SERIALIZABLE, mas faz outras funções
 
 
+--- 
+
+## 04. Intro to Transaction Processing - Pessimistic / Optimistic Concurrency - 10 e 13 Março 2025
+
+### Pessimistic Concurrency
+
+#### Handling Isolation Levels
+
+- As we have seen the standard demands 3 levels of isolation
+- It's responsibility of the DMS to ensure their application
+    * How do they achieve this? Concurrency control protocols!
+
+#### Concurrency Control
+
+- Pessimistic protocols:
+    * Locking protocols / Two-Phase locking
+- Optimistic protocols
+    * Timestamp-based
+    * Multiversion
+    * Validation
+- Recall the importance of **granularity**, a data item could be a record, index, table, etc
+
+#### Locking
+
+- A concept familiar to programming and operating systems:
+    * We need to prevent access to data item! Lock it!
+- Locks may be of different types and granulations
+
+#### Locks
+
+- Generally, all data items have a lock associated
+- Locks, may be:
+    * **Binary**: Simple lock, unlock
+    	* **To restrictive**
+    * **Shared / Exclusive (Read / Write)**: allows multiple read, but a single write
+    	* 3 operations / states: read_lock(ed), write_lock(ed) and unlock(ed)
+- Transactions waiting for a lock are kept in a queue
+- Locks may also be converted 
+
+**Binary Locks**
+
+```plaintext
+lock_item(X):
+B: if LOCK(X) == 0				(item is unlocked)
+		then LOCK(X) <- 1		(lock the item)
+	else
+		begin
+		wait 					(until LOCK(X) = 0 and the lock
+								manager wakes up the transaction)
+		go to B
+		end.
+unlock_item(X):
+	LOCK(X) <- 0				(unlock the item)
+	if any transaction are waiting
+		then wakeup one of the waiting transactions
+```
+
+**Read / Write Locks**
+
+```plaintext
+read_lock(X)
+B:	if LOCK(X) == "unlocked"
+		then begin LOCK(X) <- "read-locked"
+			no_of_reads(X) <- 1
+			end
+	else if LOCK(X) == "read-locked"
+		then no_of_reads(X) <- no_of_reads(X) + 1
+	else begin
+		wait (until LOCK(X) == "unlocked" 
+			and the lock manager wakes up the transaction)
+		go to B
+		end
+
+write_lock(X)
+B: if LOCK(X) == "unlocked"
+		then LOCK(X) <- "write-locked"
+	else begin
+		wait (until LOCK(X) == "unlocked"
+			and the lock manager wakes up the transaction)
+		go to B
+		end
+
+unlock(X)
+	if LOCK(X) == "write-locked"
+		then begin LOCK(X) <- "unlocked"
+			wake up one of the waiting transactions if any
+			end
+	else if LOCK(X) == "read-locked"
+		then begin
+			no_of_reads <- no_of_reads -1
+			if no_of_reads == 0
+				then begin LOCK(X) <- "unlocked"
+					wake up one of the waiting transactions if any
+					end
+			end
+```
 
 
+#### Two-Phase Locking
+
+- We want to divide lock management into two-phases:
+	- **Expanding**: all lock acquisitions and upgrades
+	- **Shrinking**: all lock releases and downgrades
+- If every transaction follows the two-phase locking (2PL) protocol, then it can be said that the schedule is serializable
+- We get new issues however:
+	- Deadlock
+	- Starvation
+
+|  T1  |  T2  |
+| ---- | ---- |
+| read_lock(Y) | read_lock(X) |
+| read_item(Y) | read_item(X) |
+| unlock(Y) | unlock(X) |
+| write_lock(X) | write_lock(Y) |
+| read_item(X) | read_item(Y) |
+| X := X + Y | Y := X + Y |
+| write_item(X) | write_item(Y) |
+| unlock(X) | unlock(Y) |
 
 
+|  T1  |  T2  |
+| ---- | ---- |
+| read_lock(Y) |  |
+| read_item(Y) |  |
+| unlock(Y) |  |
+|  | read_lock(X) |
+|  | read_item(X) |
+|  | unlock(X) |
+|  | write_lock(Y) |
+|  | read_item(Y) |
+|  | Y := X + Y |
+|  | write_item(Y) |
+|  | unlock(Y) |
+| write_lock(X) |  |
+| read_item(X) |  |
+| X := X + Y ||
+| write_item(X) |  |
+| unlock(X) |  |
+
+#### Deadlocks
+
+- At least two transactions are "stuck" waiting for locks held by each other:
+
+|  T1  |  T2  |
+| ---- | ---- |
+| read_lock(Y) |  |
+| read_item(Y) |  |
+|    | read_lock(X) |
+|    | read_item(X) |
+| write_lock(X) |   |
+|    | write_lock(Y) |
+
+**Deadlock Prevention Protocols**:
+
+- Not used in practice, inefficient:
+    * Total/global ordering of data
+    * Conservative 2PL
+- Give a timestamp (may be a global sequential ids) to each:
+    * **Wait-die** (Old waits, young dies)
+        + Older transactions may wait for younger
+        + Younger transactions -> rollback and restart with the same timestramp
+	- **Wound-wait** (Young waits, old kills young)
+		- Younger transactions may wait for longer
+		- If old would wait for young -> rollback young and restart with the same timestamp
+- **Waiting protocols**:
+    * **No-wait**: if any lock may not be obtained -> rollback the requesting transaction
+    * **Caution-waiting**: if T2 tries to acquire a lock held by T1 check whether T1 is also waiting , if yes rollback T2
+    * **Timeout**: if the wait exceeds a threshold -> rollback
+
+**Deadlock detection**:
+
+- Wait-for-Graph are again useful
+- When should we check?
+    * Stopping the world to check is expensive
+    * Checking with every command is also expensive
+- Results in **victim selection**:
+    * Choosing which transaction should be rolledback
+
+#### Starvation
+
+- If a **waiting protocol** is not balanced and appropriately managed, a transaction may become indefinity stuck awaiting locks
+- Both **Wait-die** and **Wound-wait** can prevent starvation:
+    * But a younger transaction may be more important!
+- We must have fair waiting scheme:
+	- Always serve transactions in "order of arrival", or
+	- Have priorities but increase the priority of long waiting transactions, and
+	- Increase the priority of previously rolled back transactions
+	 		 
+
+#### Two-phase locking
+
+- So far we have talked about basic 2PL
+- We also have:
+    * **Conservative 2PL**: A transaction must declare all locks and acquire them, or it gets none (prevent deadlocks)
+    * **Strict 2PL**: all write locks are kept until commit/abort
+    * **Rigorous 2PL**: all locks are kept
 
 
+### Optimistic Concurrency
+
+#### But what is Pessimistic / Optimistic?
+
+- Multiple views:
+    * 1 (IBM view):
+        + **Pessimistic** -> with locks
+        + **Optimistic** -> no locks
+	* 2 (that we mainly follow):
+		- **Pessimistic** -> interference (wait) during transaction
+		- **Optimistic** -> no interference (wait) until commit
+- There are hybrid solutions and implementations that do not fit either:
+    * PostgreSQl (in practice) allows transactions to keep going even if it knows a rollback will be done
+    * IBM uses it's own definition of optimistic (view multiple views 1)
+    * Elmasri often does not classify as optimistic/pessimistic
+
+#### Timestamping protocols
+
+- Strict checking and control of locks is inefficicent, particularly **if conflits are not expected to happen**
+- If concurrent access to the same data item is uncommon, approaches like timestamping may achieve serializability with lower overhead
+- Recall, we have already talked about timestamps to handle deadlocks and starvation
+    * So are they still present? It depends...
+
+#### Timestamps
+
+- Each transaction must have a **unique** mark that provides order
+    * For a transaction **T** this is **TS(T)**
+    * Note: this may be the transaction id
+- Actual clocks are't reliable in distributed systems (nor unique)!
+	- So, a global counter may be used and reset periodically
+	- This is the basic idea behind Lamport clock
+- For non-distributed systems using just an actual timestamp may be enough, if no timestamp can be repeated
+	- Same theory used to generate some unique IDs (UUID v7 - part timetamp part random)
+
+**Timestamp Ordering Algotithm**
+
+- Conflicting operations are ordered by the **TS(T)** of each transaction, this ensures the same order as one serial schedule
+	- The schedule is conflict equivalent and therefore serializable!
+- For unique **TS(T)** values the serial schedule has been chosen
+- We have:
+	- **read TS** -> **most recent** transaction that read a data item
+	- **write TS** -> **most recent** transaction that wrote a data item 
+
+**Basic TOA**:
+
+- A transaction **T** can **only** change items with timestamps **older** than itself
+    * Older means: write_TS > TS(T) and read_TS > TS(T)
+    * If the check fails -> rollback T
+        + All transactions that depend on T must also be rolled back (and so on... we have a cascading rollback)
+- A transaction **T** can **only** read items **older** than itself
+	- Older means: write_TS > TS(T)
+	- If check fails -> same as above
+- Repeat rolled back transactions with a **new** timestamp
+- Update write_TS and read_TS (or keep read_TS!) as needed
+- Basic TOA implies conflict serializability with no deadlocks, but with starvation and cascading rollbacks
+
+| T1 -> TS(T1) = 1 | T2 -> TS(T2) = 2 |
+| ---------------- | ---------------- |
+| read(Y) |    |
+|    | read(Y) |
+|    | write(Y) |
+| read(X) |     |
+|    | read(X) |
+|    | write(X) |
+
+| Item | read_TS | write_TS |
+| ---- | ------- | -------- |
+| X | 2 | 2 |
+| Y | 2 | 2 |
+
+**Strict TOA**
+
+- Any transaction that reads an item older than itself must wait until the transaction responsible for changing **write_TS** ends
+- Bring back "locking" but not deadlocks
+- Implies a strict and serializable schedule
+
+**Thnoma's Write Rule**
+
+- Changes the scheme of basic TOA by allowing "blind" writes
+- If a more recent write exists ignore "our" write
+- Not conflict serializable but has less write induced rollbacks
+
+#### Multiversion Protocols
+
+- Another approach
+    * Keep multiple versions of data items and serve them
+    * Each write operation creates a new version
+    * Transactions may read older versions
+- Causes less rollbacks at the cost of higher storage!
+- Two examples:
+    * Timestamped-based
+    * 2PL-based
+
+**Timestamped-based example**
+
+- Each version has a read_TS and a write_TS
+- For a transaction T:
+    * write_item finds the most recent (by write_TS) version:
+        + If read_TS > TS(T) or write_TS > TS(T) -> rollback
+        + Otherwise create a new version with read_TS = TS(T) and write_TS = TS(T)
+    + read_item finds a version such that it has max(write_TS) among the set of versions that satisfy write_TS <= TS(T):
+    	+ Then, on the most recent version, update read_TS to max_(TS(T), current_read_TS)
+
+**2PL-based (locking) example**
+
+- Extends 2PL with a **certify lock** mode
+- Two versions may be held for each item: a committed and an **optional** uncommitted version:
+    * Other transactions read the uncommited version while a transaction T hnolds the write lock
+    * T then upgrades all lock to **certify** ion  order to commit
+- Allows read to proceed concurrent to writing operations, but may result in high waiting times to commit!
+     
+#### Optimistic Concurrency (Validation / certification)
+
+- Drop **any** pre-checking to reduce overhead
+- Operations are done against copies of the data items, before commit it is validated if the operations would violate serializability
+    * if not -> apply the local state to the database
+    * if yes -> rollback and try again
+- Only efficient if there is little conflict among transactions in practice (an optimistic view)
+- Has 3 phases:
+    * **Read phase**: reads from commited data, but writes to local copies
+    * **Validation phase**: checks for serializability and conflicts with committed and validating transactions
+    * **Write phase**: applies updates or discards local state
+- To aid validation write and read sets are kept associated with timestamps
+- For T2 not to interfere with T1 on of these conditions must hold true: 
+    * Transaction T1 completes its *write phase* before T2 starts its *read phase*
+    * T2 starts its *write phase* **after** T1 completes its **write phase**, and the *read_sets* have no items in common
+    * Both the *read_sets* and *write_sets* have no items in common and T1 completes its *read phase* **before** T2 completes its *read_phase*
+
+#### Savepoints / Partial Rollbacks
+
+- A savepoint is a "moment" where the state of a transaction was saved and may be  rolled back to, without rolling the entire transaction
+- So, we have *subtransactions*
+
+```sql
+BEGIN;
+	INSERT INTO table1 VALUES (1);
+	SAVEPOINT my_savepoint;
+	INSERT INTO table1 VALUES (2);
+	SAVEPOINT my_savepoint;
+	INSERT INTO table1 VALUES (3);
+
+	-- rollback to the second savepoint
+	ROLLBACK TO SAVEPOINT my_savepoint;
+	SELECT * FROM table;
+
+	-- release the second savepoint
+	RELEASE SAVEPOINT my_savepoint;
+
+	-- rollback to the first savbepoint
+	ROLLBACK TO SAVEPOINT my_savepoint;
+	SELECT * FROM table1;
+COMMIT;
+``` 
+
+- Upon failure we may now go back to the savepoints!
+
+![Savepoints](./img/17.png)
+
+#### Delayed Integrity Checks
+
+- The **SET CONSTRAINTS** command allow to control when integrity checks are done:	
+    * **IMMEDIATE**: as usual, checked for each operation
+    * **DEFERED**: wait until commit
+- Useful when operations may break constraints momentarily (alongside savepoints)
+
+---
