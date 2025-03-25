@@ -708,3 +708,418 @@ COMMIT;
 - Useful when operations may break constraints momentarily (alongside savepoints)
 
 ---
+
+## 05. PostgreSQL Transaction Isolation - 17Mar20225
+
+Unlike traditional aproaches PostgreSQL uses Multiversion Concurrency Control (MVCC)
+
+- Complemented with explicit locking (table and row-level)
+- A custom hybrid of 2PL and Multiversion
+    * Still has locks (lots of them)
+    * Offers **Seriazable Snapshot Isolation**
+
+**MVCC**
+
+- Popular with NoSQL/NewSQL databases
+- Growing tendency even with relational databases
+
+### Transaction Isolation - Standard vs Postgresql
+
+#### Standard - Isolation Level vs Types of Violation
+
+| Isolation Level | Dirty Read | Nonrepeatable Read | Phantom |
+| --------------- | ---------- | ------------------ | ------- |
+| READ UNCOMMITTED | Yes | Yes | Yes |
+| READ COMMITTED | No | Yes | Yes |
+| REPEATABLE READ | No | No | Yes |
+| SERIALIZABLE | No | No | No |
+
+#### PostgreSQL - Isolation Level vs Type of Violation
+
+| Isolation Level | Dirty Read | Nonrepeatable Read | Phantom Read | Serialization Anomaly | 
+| ------------- | ---------- | ------------------ | ------- | -- |
+| READ UNCOMMITTED | Allowed but not in PG | Possible | Possible | Possible |
+| READ COMMITTED | Not Possible | Possible | Possible | Possible |
+| REPEATABLE READ | Not Possible | Not Possible | Allowed but not in PG | Possible |
+| SERIALIZABLE | Not Possible | Not Possible | Not Possible | Not Possible |
+
+- PostgreSQL expandiu a defenição de Isolamento, tem a mais **Seriazable Anomaly**
+- Read Uncommitted em PostgreSQL o Dirty Read não acontece
+- Repeatable Read em PostgreSQL, o Phantom Read não acontece
+
+> Só se usam normalmente 2 nĩveis de isolamento, READ COMMITED e REPEATABLE READ
+> SERIALIZABLE é possível mas não é muito conveniente
+
+**Por defenição, o PostgreSQL, usa o nível de isolamento READ COMMITTED **
+
+## 06. PostgreSQL - Multiversion Concurrency Control (MVCC) - 20MAR2025 e 24MAR2025
+
+- Each SQL statement sees a snapshot of data (a database version) as it was some time agbo, regardless of the current state of the underlying data.
+- Prevents statements from viewing inconsistent data produced by concurrent transactions, performing updates on the same data rows, providing transaction isolation  for each database session
+- MVCC minimizes lock contention in order to allow for resonable performance in multiuser environments
+- Advantage:
+    * locks acquire for querying (reading) data, do not conflict with locks acquired for writing data, so, reading never blocks writing and writing never blocks reading - **Serializab le Snapshot Isolation (SSI)**PostgreSQL provides a means for creating locks that have application-defined meanings. These are called advisory locks, because the system does not enforce their use — it is up to the application to use them correctly. Advisory locks can be useful for locking strategies that are an awkward fit for the MVCC model. For example, a common use of advisory locks is to emulate pessimistic locking strategies typical of so-called “flat file” data management systems. While a flag stored in a table could be used for the same purpose, advisory locks are faster, avoid table bloat, and are automatically cleaned up by the server at the end of the session.
+
+
+    * proper use of MVCC will generally provide better performance than locks.
+
+| Comando | Bloq. de Leitura | Bloq. de Escrita | Outros for Share | Outros for Update |
+| --- | ---- | ---- | ---- | ---- |
+| SELECT | X | X | X | X | 
+| SELECT FOR SHARE | X | √ | √ | X |
+| SELECT FOR UPDATE | X | √ | X | √ |
+
+### READ COMMITTED
+
+- Default Isolation Level in PostgreSQL
+- Um **snapshot por operação**
+- SELECT only sees committed data before the start of the query, never sees uncommitted data or data committed by different transactions during his lifetime
+- Only commited data ujp to query and his own uncommited updates (SELECT)
+- UPDATE, SELECT FOR UPDATE and SELECT FOR SHARE têm o mesmo comportamento do SELECT em termos de *query for target rows*
+- INSERT com ON CONFLICT DO UPDATE, comporta-se de modo semelhante
+- INSERT com ON CONFLICT DO NOTHING, pode ter inserções não inseridas devido ao *outcome* de noutras transações cujos efeitos não são visiveis ao *snapshot* da transação
+- A row may have been updated/deleted/locked sence the snapshot, we must wait in those cases (UPDATE/DELETE/*):
+    * If only locked -> proceed
+    * If rolledback -> proceed
+    * If commited, does it stil match the WHERE?
+        + Yes -> proceed
+        + No -> nothing to commit
+
+### REPATABLE READ
+
+- Só vê dados commited antes do começo da transação
+- Um **snapshot por transacção** at first operation
+- Only committed data up to the query plus own uncommited updates (SELECT)
+- When performing INSERT there will be either an INSERT or UPDATE:
+    * If ON CONFLICT UPDATE an insert that conflicts with another transaction will act as an UPDATE even if the other transaction is not visible to the snapshot!
+    * If ON CONFLICT DO NOTHING an insert will be ignored even if the conflict originates in a transaction not yet visible
+- A row may have been updated/deleted/locked since the snapshot, wait then (UPDATE/DELETE/*)
+    * If only locked -> proceed
+    * If rolledback -> proceed
+    * If committed -> rollback and retry at application level
+
+### SERIALIZABLE
+
+- Strictest transaction isolation
+- Ao usar este nível, as aplicações têm de estar preparadas para repetir a transacção devido a falhas
+- Para garantir *seriazibility*, o PostgreSQL usa *predicate locking*, o que quer dizer que mantém um lock que determina quando uma escrita tem ou não impacto no resultado de uma leitura anterior para a transação corrente
+- Similar to what happens with repeatable read:
+    * No additional blocking, but additional checks are done to detect possible anomalies -> rollback
+- Introduces **predicate locking**:
+    * Not actually (expect when it does) locking anything (no deadlock)
+    * Used to detect dependencies that may cause a serialization anomaly
+    * Multiple granularitbies
+    * SERILIZABLE READ ONLY DEFERRABLE will block
+
+### PostgreSQL Modifiers
+
+- A WHERE may take:
+    * FOR [[NO] KEY] UPDATE
+    * FOR [KEY] SHARE
+- A INSERT may take:
+    * FOR UPDATE
+    * FOR SHARE
+
+### Explicit Locking
+
+- MVCC handles most situations (and operations already obtain some locks...) but we may need to control concurrency with greater detail
+- We can see lock info with  `pg_lock`
+- We have:
+    * Table-level locking
+    * Row-level locking
+    * Page-level locking (automatic shared/exclusive, released immediatly)
+    * Advisory locks
+- Two transactions can't not hold incompatible locks, but a transaction does not conflict with itself;
+
+![Explicit Locking](./img/18.png)
+
+- Row-level locks never block reads, only writes and other locks!
+- They are attributed by the modifiers we have already seen:
+    * FOR UPDATE -> update lock and wait others UPDATE/DELETE/*
+    * FOR NO KEY UPDATE -> blocks all expect SELECT FOR KEY SHARE
+    * FOR SHARE -> like previous plus SELECT FOR SHARE
+    * FOR KEY SHARE -> blocks only FOR UPDATE / DELETE / UPDATE that changes primary keys
+
+#### Row-level locks
+
+- Row-level locks do not occupy memory, but may require disk writes
+
+![Row-level locking](./img/19.png)
+
+#### Deadlocks
+
+The use of explicit locking can increase the likelihood of deadlocks, wherein two (or more) transactions each hold locks that the other wants. For example, if transaction 1 acquires an exclusive lock on table A and then tries to acquire an exclusive lock on table B, while transaction 2 has already exclusive-locked table B and now wants an exclusive lock on table A, then neither one can proceed. PostgreSQL automatically detects deadlock situations and resolves them by aborting one of the transactions involved, allowing the other(s) to complete. (Exactly which transaction will be aborted is difficult to predict and should not be relied upon.)
+
+Note that deadlocks can also occur as the result of row-level locks (and thus, they can occur even if explicit locking is not used). Consider the case in which two concurrent transactions modify a table. The first transaction executes:
+
+```sql
+UPDATE accounts SET balance = balance + 100.00 WHERE acctnum = 11111;
+```
+
+This acquires a row-level lock on the row with the specified account number. Then, the second transaction executes:
+
+```sql
+UPDATE accounts SET balance = balance + 100.00 WHERE acctnum = 22222;
+UPDATE accounts SET balance = balance - 100.00 WHERE acctnum = 11111;
+```
+
+The first UPDATE statement successfully acquires a row-level lock on the specified row, so it succeeds in updating that row. However, the second UPDATE statement finds that the row it is attempting to update has already been locked, so it waits for the transaction that acquired the lock to complete. Transaction two is now waiting on transaction one to complete before it continues execution. Now, transaction one executes:
+
+```sql
+UPDATE accounts SET balance = balance - 100.00 WHERE acctnum = 22222;
+```
+
+Transaction one attempts to acquire a row-level lock on the specified row, but it cannot: transaction two already holds such a lock. So it waits for transaction two to complete. Thus, transaction one is blocked on transaction two, and transaction two is blocked on transaction one: a deadlock condition. PostgreSQL will detect this situation and abort one of the transactions.
+
+The best defense against deadlocks is generally to avoid them by being certain that all applications using a database acquire lockNote that deadlocks can also occur as the result of row-level locks (and thus, they can occur even if explicit locking is not used). Consider the case in which two concurrent transactions modify a table. The first transaction executes:
+
+```sql 
+UPDATE accounts SET balance = balance + 100.00 WHERE acctnum = 11111;
+```
+
+This acquires a row-level lock on the row with the specified account number. Then, the second transaction executes:
+
+```sql
+UPDATE accounts SET balance = balance + 100.00 WHERE acctnum = 22222;
+UPDATE accounts SET balance = balance - 100.00 WHERE acctnum = 11111;
+```
+
+The first UPDATE statement successfully acquires a row-level lock on the specified row, so it succeeds in updating that row. However, the second UPDATE statement finds that the row it is attempting to update has already been locked, so it waits for the transaction that acquired the lock to complete. Transaction two is now waiting on transaction one to complete before it continues execution. Now, transaction one executes:
+
+```sql
+UPDATE accounts SET balance = balance - 100.00 WHERE acctnum = 22222;
+```
+
+Transaction one attempts to acquire a row-level lock on the specified row, but it cannot: transaction two already holds such a lock. So it waits for transaction two to complete. Thus, transaction one is blocked on transaction two, and transaction two is blocked on transaction one: a deadlock condition. PostgreSQL will detect this situation and abort one of the transactions.
+
+The best defense against deadlocks is generally to avoid them by being certain that all applications using a database acquire locks on multiple objects in a consistent order. In the example above, if both transactions had updated the rows in the same order, no deadlock would have occurred. One should also ensure that the first lock acquired on an object in a transaction is the most restrictive mode that will be needed for that object. If it is not feasible to verify this in advance, then deadlocks can be handled on-the-fly by retrying transactions that abort due to deadlocks.
+
+So long as no deadlock situation is detected, a transaction seeking either a table-level or row-level lock will wait indefinitely for conflicting locks to be released. This means it is a bad idea for applications to hold transactions open for long periods of time (e.g., while waiting for user input).s on multiple objects in a consistent order. In the example above, if both transactions had updated the rows in the same order, no deadlock would have occurred. One should also ensure that the first lock acquired on an object in a transaction is the most restrictive mode that will be needed for that object. If it is not feasible to verify this in advance, then deadlocks can be handled on-the-fly by retrying transactions that abort due to deadlocks.
+
+So long as no deadlock situation is detected, a transaction seeking either a table-level or row-level lock will wait indefinitely for conflicting locks to be released. This means it is a bad idea for applications to hold transactions open for long periods of time (e.g., while waiting for user input).
+
+#### Table-level Locks
+
+**Tip** - Only an ACCESS EXCLUSIVE lock blocks a SELECT (without FOR UPDATE/SHARE statement)
+
+Once acquired, a lock is normally held until the end of the transaction. But if a lock is acquired after establishing a savepoint, the lock is released immediately if the savepoint is rolled back to. This is consistent with the principle that ROLLBACK cancels all effects of the commands since the savepoint. The same holds for locks acquired within a PL/pgSQL exception block: an error escape from the block releases locks acquired within it.
+
+![Table-level locking](./img/20.png)
+
+Conflicting row-level locks
+
+![Conflicting row-level locks](./img/21.png)
+
+#### Advisory Locks
+
+PostgreSQL provides a means for creating locks that have application-defined meanings. These are called advisory locks, because the system does not enforce their use — it is up to the application to use them correctly. Advisory locks can be useful for locking strategies that are an awkward fit for the MVCC model. For example, a common use of advisory locks is to emulate pessimistic locking strategies typical of so-called “flat file” data management systems. While a flag stored in a table could be used for the same purpose, advisory locks are faster, avoid table bloat, and are automatically cleaned up by the server at the end of the session.
+
+- Bom para quando temos de replicar a BD em diversos servidores
+- Podem ser configurados a nível da transacção ou sessão
+
+
+## 08 - Dynamic Databases SQL/PSM - 24MAR2025
+
+- There are events that require changes to the database
+- Normally, we use databases to store data and manipulate it in the application layer
+    * This often leads to "awkward" logic, storage, coupling and inconsistent behavior!
+
+### SQL / PSM
+
+- SQL / PSM (Persistent Stored Modules) is a procedure language to be stored and executed as functions and stored procedures (and other details...)
+- The standard covers:
+    * 1. local variables
+    * 2. flow control
+    * 3. cursor manipulation - resultSet em Java são cursores
+    * 4. error handling
+    * 5. stored procedures
+    * 6. stored function
+
+#### Variables
+
+- Declaration syntax
+```sql
+DECLARE <variable name> <return type> [DEFAULT value]
+```
+
+- Variable settings
+    * SET - direct value setting -> `SET var := expression`
+    * INTO - pass values inside queryes
+
+- pgSQL
+    * `name [ CONSTANT ] type [ COLLATE collation_name ] [ NOT NULL ] [ { DEFAULT | := | = } expression ];`
+     
+#### Branching
+
+```sql
+IF boolean-expression THEN
+    statements
+[ ELSIF boolean-expression THEN
+    statements
+[ ELSIF boolean-expression THEN
+    statements
+    ...
+]
+]
+[ ELSE
+    statements ]
+END IF;
+```
+
+There is also support for switch cases:
+- Basic
+- Searched
+
+**Basic / Simple**
+
+```sql
+CASE search-expression
+    WHEN expression [, expression [ ... ]] THEN
+      statements
+  [ WHEN expression [, expression [ ... ]] THEN
+      statements
+    ... ]
+  [ ELSE
+      statements ]
+END CASE;
+```
+
+**Searched**
+
+```sql
+CASE
+    WHEN boolean-expression THEN
+      statements
+  [ WHEN boolean-expression THEN
+      statements
+    ... ]
+  [ ELSE
+      statements ]
+END CASE;
+```
+
+#### Loops
+
+With the `LOOP`, `EXIT`, `CONTINUE`, `WHILE`, `FOR`, and `FOREACH` statements, you can arrange for your PL/pgSQL function to repeat a series of commands.
+
+**Loop**
+
+- LOOP defines an unconditional loop that is repeated indefinitely until terminated by an EXIT or RETURN statement. The optional label can be used by EXIT and CONTINUE statements within nested loops to specify which loop those statements refer to.
+
+```sql
+[ <<label>> ]
+LOOP
+    statements
+END LOOP [ label ];
+```
+
+**Exit**
+
+```sql
+EXIT [ label ] [ WHEN boolean-expression ];
+```
+
+**Continue**
+
+```sql
+CONTINUE [ label ] [ WHEN boolean-expression ];
+```
+
+**While**
+
+The WHILE statement repeats a sequence of statements so long as the boolean-expression evaluates to true. The expression is checked just before each entry to the loop body.
+
+```sql
+[ <<label>> ]
+WHILE boolean-expression LOOP
+    statements
+END LOOP [ label ];
+```
+
+**For (Integer variant)**
+
+This form of FOR creates a loop that iterates over a range of integer values. The variable name is automatically defined as type integer and exists only inside the loop (any existing definition of the variable name is ignored within the loop). The two expressions giving the lower and upper bound of the range are evaluated once when entering the loop. If the BY clause isn't specified the iteration step is 1, otherwise it's the value specified in the BY clause, which again is evaluated once on loop entry. If REVERSE is specified then the step value is subtracted, rather than added, after each iteration.
+
+```sql
+[ <<label>> ]
+FOR name IN [ REVERSE ] expression .. expression [ BY expression ] LOOP
+    statements
+END LOOP [ label ];
+```
+
+Examples:
+
+```sql
+FOR i IN 1..10 LOOP
+    -- i will take on the values 1,2,3,4,5,6,7,8,9,10 within the loop
+END LOOP;
+
+FOR i IN REVERSE 10..1 LOOP
+    -- i will take on the values 10,9,8,7,6,5,4,3,2,1 within the loop
+END LOOP;
+
+FOR i IN REVERSE 10..1 BY 2 LOOP
+    -- i will take on the values 10,8,6,4,2 within the loop
+END LOOP;
+```
+
+
+**Looping through query results**
+
+Using a different type of FOR loop, you can iterate through the results of a query and manipulate that data accordingly. The syntax is:
+
+```sql
+[ <<label>> ]
+FOR target IN query LOOP
+    statements
+END LOOP [ label ];
+```
+
+The target is a record variable, row variable, or comma-separated list of scalar variables. The target is successively assigned each row resulting from the query and the loop body is executed for each row. 
+
+**Looping through arrays**
+
+The FOREACH loop is much like a FOR loop, but instead of iterating through the rows returned by an SQL query, it iterates through the elements of an array value. (In general, FOREACH is meant for looping through components of a composite-valued expression; variants for looping through composites besides arrays may be added in future.) The FOREACH statement to loop over an array is:
+
+```sql
+[ <<label>> ]
+FOREACH target [ SLICE number ] IN ARRAY expression LOOP
+    statements
+END LOOP [ label ];
+```
+
+#### Cursors
+
+Rather than executing a whole query at once, it is possible to set up a cursor that encapsulates the query, and then read the query result a few rows at a time. One reason for doing this is to avoid memory overrun when the result contains a large number of rows. (However, PL/pgSQL users do not normally need to worry about that, since FOR loops automatically use a cursor internally to avoid memory problems.) A more interesting usage is to return a reference to a cursor that a function has created, allowing the caller to read the rows. This provides an efficient way to return large row sets from functions.
+
+All access to cursors in PL/pgSQL goes through cursor variables, which are always of the special data type refcursor. One way to create a cursor variable is just to declare it as a variable of type refcursor. Another way is to use the cursor declaration syntax, which in general is:
+
+```sql
+name [ [ NO ] SCROLL ] CURSOR [ ( arguments ) ] FOR query;
+```
+
+Examples:
+
+```sql
+DECLARE
+    curs1 refcursor;
+    curs2 CURSOR FOR SELECT * FROM tenk1;
+    curs3 CURSOR (key integer) FOR SELECT * FROM tenk1 WHERE unique1 = key;
+```
+
+Normal operation with cursor:
+
+- `OPEN cursor_name`
+- `FETCH cursor_name INTO variable`
+- `CLOSE cursor_name`
+
+Cycles for cursors:
+
+```sql
+FOR loop_name as cursor_name CURSOR FOR
+	query
+DO
+	statement_list
+END FOR;
+```
+
