@@ -1123,3 +1123,261 @@ DO
 END FOR;
 ```
 
+## 08 - Dynamic Databases SQL/PSM -  Stored Procedures, and Functions 31MAR2025
+
+### Error Handling
+
+```sql
+BEGIN TRY
+	<query>
+END TRY
+DO
+	<error case>
+END CATCH
+```
+
+> Note: in PSM only! PL/pgSQL does not implement this!
+
+#### Error Handling - PL/pgSQL
+
+```sql
+[ <<label>> ]
+[ DECLARE
+	declarations ]
+BEGIN
+	statements
+EXCEPTION
+	WHEN condition [ OR condition ... ] THEN
+		handler_statements
+	[ WHEN condition [ OR condition ... ] THEN
+		handler_statements
+	... ]
+END;
+```
+
+Example:
+
+```sql
+INSERT INTO mytab(firstname, lastname) VALUES ('Tom', 'Jones');
+BEGIN
+	UPDATE mytab SET firstname = 'Joe' WHERE lastname = 'Jones';
+	x := x + 1;
+	y := x / 0;
+EXCEPTION
+	WHEN division_by_zero THEN
+		RAISE NOTICE 'caught division_by_zero';
+		RETURN x;
+END;
+```
+
+```sql
+CREATE FUNCTION merge_db(key INT, data TEXT) RETURNING VOID AS
+$$
+BEGIN
+	LOOP
+		-- first try to update the key
+		UPDATE db SET b = data WHERE B = key;
+		IF found THEN
+			RETURN;
+		END IF;
+		-- not there, so try to insert the key
+		-- if someone else insert the same key concurrently
+		-- we could get a unique-key failure
+		BEGIN
+			INSERT INTO db(a,b) VALUES (key,data);
+			RETURN;
+		EXCEPTION WHEN unique_violation THEN
+			-- Do nothing, and loop to try the UPDATE again
+		END;
+	END LOOP;
+END;
+$$
+```	
+
+> Note: DON'T DO THIS! Use the ON CONFLICT UPDATE modifier
+
+Para saber que tipos de erros existem:
+
+```sql
+GET STACKED DIAGNOSIS variable { = | := } item [, ...];
+```
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| RETURNED_SQLSTATE | text | the SQLSTATE error code of the exception |
+| COLUMN_NAME | text | the name of the column related to execption |
+| CONSTRAINT_NAME | text | the name of the constraint related to the exception |
+| PG_DATATYPE_NAME | text | the name of the data type related to exception |
+| MESSAGE_TEXT | text | the text of the exception's primary message |
+| TABLE_NAME | text | the name of the table related to exception |
+| SCHEMA_NAME | text | the name of the schema related to exception |
+| PG_EXCEPTION_DETAIL | text | the text of the exception's detail message, if any |
+| PG_EXCEPTION_HINT | text | the text of the exception's hint message, if any |
+| PG_EXCEPTION_CONTEXT | text | line(s) of text describing the call stack at the time of the exception |
+
+- Log info:
+    * `RAISE NOTICE 'Calling cs_create_job(%)', v_job_id;`
+- Log and throw exception:
+    * `RAISE EXCEPTION 'Nonexistent ID --> %', user_id;`
+- Using SQLSTATE to be used with EXCEPTION:
+    * 	`RAISE division_by_zero;`
+    *  `RAISE SQLSTATE '22012';
+  
+### Stored Procedures
+
+- We have a change in the execution model
+
+ ![Execution Model - Procedures](./img/22.png)
+
+- Advantages:
+    * **Code reuse**: Reduces duplication of effort and improves software modularity
+    * **Performance**: Reduce the amount of data transferred between client and server
+    * They improve the modeling power provided by views, allowing more complex types of derived data to be made available
+    * **Maintenance**: They can be used to check complex restrictions that go beyond the power of assertions and triggers. The centralization of business logic facilitates maintenance and updates
+- Disadvantages:
+    * **Portability**: Difficult to change between different databases
+    * **Complexity**: Difficult to maintain and comprehend all relationships and consequences
+
+- Extended syntax set for SQL
+- Can receive parameters
+- Returns no values (but may pass arguments around)
+- May commit/rollback transactions
+- Pre-compiled and stored in the database
+- May be called by other procedures (and applications)
+
+```sql
+CREATE PROCEDURE <procedure name> (<parameters>)
+<local declarations>
+<procedure body>;
+```
+
+- Each parameter must have a type and mode:
+    * **IN** entry only values (default)
+    * **OUT** return values
+    * **INOUT** both
+    `(<parameter mode> <parameter name> <parameter type>, ...)`
+- Remove as one may expect:
+    * `DROP <procedure name>`
+- To call it from SQL:
+    * `CALL <procedure name>(<argument list>)`
+
+Exemplos:
+
+```sql
+CREATE PROCEDURE SP_SelecionarProdutos(IN quantidade INT)
+LANGUAGE SQL
+BEGIN
+	SELECT * FROM PRODUTOS
+	LIMIT quantidade;
+END;
+
+CALL SP_SeleceionarProdutos(2);
+```
+
+```sql
+CREATE PROCEDURE SP_VerificarQuantidadeProdutos(OUT quantidade INT)
+LANGUAGE SQL AS $$
+BEGIN
+	SELECT count(*) INTO quantidade FROM PRODUTOS;
+END $$;
+
+CALL SP_VerificarQuantidadeProdutos(@total);
+SELECT @total
+```
+
+```sql
+CREATE PROCEDURE SP_ElevarAoQuadrado(INOUT numero INT)
+BEGIN
+	SET numero = numero * numero;
+END;
+
+SET @valor = 5;
+CALL SP_ElevarAo Quadrado(@valor);
+SELECT @valor
+```
+
+
+### Stored Functions
+
+- Similar to procedures but *always* return a value, in addition to passing around arguments
+- May be use as part of both queries or expressions
+- Also pre-compiled and stored
+
+```sql
+CREATE FUNCTION <function name>(<parameters>)
+RETURNS <return type>
+<local declarations>
+<function body>;
+```
+
+- Parameters need only their type (but can take mode):
+    * (<parameter name><parameter type>, ...)
+- Functions may be classified as (according to return type):
+    * Scalar (Single value)
+    * Non-scalar (Table)
+
+Examples:
+
+```sql
+CREATE OR REPLACE FUNCTION calcular_comprimento_medio(text, text)
+RETURNS NUMERIC AS $$
+BEGIN
+	RETURN (LENGTH($1) + LENGTH($2)) / 2.0;
+END;
+$$;
+```
+
+```sql
+CREATE OR REPLACE FUNCTION listar_pessoas()
+RETURNS TABLE (id INT, name TEXT, idade INT) AS $$
+BEGIN
+	RETURN QUERY
+		SELECT id, nome, idade
+		FROM pessoas;
+END;
+$$;
+```
+
+- Remove as one may expect:
+    * `DROP <function name>;`
+- To call it from SQL simply use it as part of a statement
+
+More examples:
+
+```sql
+DELIMITER $$
+CREATE FUNCTION calc_nota(nota NUMERIC(15,2)) RETURNS NUMERIC(15,2)
+BEGIN
+	DECLARE peso INT;
+	IF nota > 9.5 THEN
+		SET peso = 2;
+	ELSE
+		SET peso = 1;
+	END IF;
+	RETURN(nota * peso) / 20;
+END $$
+DELIMITER;
+```
+
+```sql
+SELECT
+	a.nome,
+	p.descricao,
+	calc_nota(n.valor_nota) AS nota_calculada,
+	n.valor_nota AS nota_original
+FROM
+	aluno a
+	INNER JOIN nota n ON a.id = n.aluno_id
+	INNER JOIN prova p ON n.prova_id = p.id
+ORDER BY
+	a.id,
+	nota_calculada DESC;
+```
+
+### Query Optimization
+
+- To help Postgres we can mark a function as:
+    * **IMMUTABLE**: no database operations and returns the same result (my be optimized with cache)
+    * **STABLE**: does not modify the database but returns may change (due to input or queries)
+    * **VOLATILE**: may produce side effects and/or change returns for any reason (this is the default)
+
