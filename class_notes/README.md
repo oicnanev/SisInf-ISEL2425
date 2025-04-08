@@ -1381,3 +1381,184 @@ ORDER BY
     * **STABLE**: does not modify the database but returns may change (due to input or queries)
     * **VOLATILE**: may produce side effects and/or change returns for any reason (this is the default)
 
+## Triggers and Views for Dynamic Databases - 07 April 2025
+
+### Triggers
+
+- Rules used to monitor conditions and act on them
+- **Event-Condition-Action** (ECA) model:
+    * **Event** -> that trigger the rule
+    * **Optional Conditions** -> whether the rule should be applied
+    * **Actions** -> To be taken
+
+```sql
+CREATE [OR REPLACE] [CONSTRAINT] TRIGGER trigger_name
+{BEFORE | AFTER | INSTEAD OF}
+{ [DELETE] [OR | ,] [INSERT] [OR | ,] [UPDATE] [OF column[, ...]]
+ [OR | ,] [TRUNCATE] [OR | ,] }
+ ON table_name [FROM referenced_table_name]
+ [ NOT DEFERRABLE | [DEFERRABLE] [INITIALLY IMMEDIATE |
+ INITIALLY DEFERRED] ]
+ [REFERENCING { {OLD | NEW} TABLE [AS] transition_relation_name }]
+ FOR [EACH] {ROW | STATEMENT}
+ [WHEN (conditions)]
+ EXECUTE {FUNCTION | PROCEDURE} function_name (parameters)
+```
+
+#### Events
+
+- **Insert** inserting one or more values
+- **Update** changing one or more values
+- **Delete** deleting one or more values
+
+#### Transactional Support / Separation
+
+- Rule/condition considerations
+    * Immediate considerations - inline with transaction
+    * Delayed/Deferred considerations - at the end of the trigger event
+    * Detach considerations - create a new transaction
+
+> NOTE: In PostgreSQL type of control fails under CONSTRAINT TRIGGERS
+Otherwise triggers in PostgreSQL are always executed as part of the causing transaction and may cause it to fail *silently*!!!
+
+**Example**
+
+```sql
+-- R1:
+CREATE TRIGGER Total_sal1
+	AFTER INSERT ON EMPLOYEE
+	FOR EACH ROW
+	WHEN ( NEW.Dno IS NOT NULL )
+		UPDATE DEPARTMENT
+		SET Total_sal = Total_sal + NEW.Salary
+		WHERE Dno = NEW.Dno;
+
+-- R2: 
+CREATE TRIGGER Total_sal2
+	AFTER UPDATE OF Salary ON EMPLOYEE
+	FOR EACH ROW
+	WHEN ( NEW.Dno IS NOT NULL )
+		UPDATE DEPARTMENT
+		SET Total_sal = Total_sal + NEW.Salary – OLD.Salary
+	WHERE Dno = NEW.Dno;
+
+-- R3: 
+CREATE TRIGGER Total_sal3
+	AFTER UPDATE OF Dno ON EMPLOYEE
+	FOR EACH ROW
+	BEGIN
+	UPDATE DEPARTMENT
+	SET Total_sal = Total_sal + NEW.Salary
+	WHERE Dno = NEW.Dno;
+	UPDATE DEPARTMENT
+	SET Total_sal = Total_sal – OLD.Salary
+	WHERE Dno = OLD.Dno;
+	END;
+
+-- R4: 
+CREATE TRIGGER Total_sal4
+AFTER DELETE ON EMPLOYEE
+FOR EACH ROW
+WHEN ( OLD.Dno IS NOT NULL )
+	UPDATE DEPARTMENT
+	SET Total_sal = Total_sal – OLD.Salary
+	WHERE Dno = OLD.Dno;
+```
+
+- **After** an event
+- **Before** an event
+- **Instead of** an event
+
+#### Row level vs Statement level triggers
+
+- **Row level triggers** - trigger once for each tuple, FOR EACH ROW
+- **Statement level triggers** - trigger once for the entire statement, FOR EACH STATEMENT
+
+| When | Event | Row Level | Statement Level |
+| ---- | ----- | --------- | --------------- |
+|Before| Insert/Update/Delete |Table, views and foreign table | Table, views and foreign table |
+|Before| Truncate | - | Table, views and foreign table |
+|After| Insert/Update/Delete |Table, views and foreign table | Table, views and foreign table |
+|After| Truncate | - | Table, views and foreign table |
+|Instead of| Insert/Update/Delete |Table, views and foreign table|- |
+|Instead of| Truncate | - | - |
+
+
+> **INSTEAD OF** only supports FOR EACH ROW
+
+**Another example**
+- Trigger used to insert in a table
+- Since it runs *inline* a RAISE EXCEPTION will cause a rollback for the complete transaction
+- If all checks succeed, it will update the timestamp
+
+```sql
+CREATE TRIGGER check_update
+	BEFORE UPDATE ON accounts
+	FOR EACH ROW
+	WHEN (old.balance IS DISTINCT FROM new.balance)
+	EXECUTE FUNCTION check_account_update();
+
+CREATE TRIGGER LOG_update
+	AFTER UPDATE ON accounts
+	FOR EACH ROW
+	WHEN (old.* IS DISTINCT FROM new.*)
+	EXECUTE FUNCTION check_account_update();
+```
+
+### Views
+
+- Queries may involve multiple tables (or views) with complex joins/searches/aggregations
+- A complex query may be saved as view
+    * single virtual table
+    * may be read as normal table
+
+```sql
+CREATE [OR REPLACE] [TEMP[ORARY]][MATERIALIZED]
+[RECURSIVE] VIEW view_name [ (column[, ...]) ]
+ [ USING method ]
+WITH ( view_option_name [= view_option_value] [, ... ] ) ]
+AS select_statement
+[WITH [CASCADED | LOCAL] CHECK OPTION
+ [ [NO] DATA] ]
+]
+```
+
+#### Types of views according the implementation
+
+1. Query modification
+2. View materialization
+
+##### Query modification
+
+Involves modifying or transforming the view query (submitted by the user) into a query on the underlying base tables. For example, the query **QV1** would be automatically modified to the following query by the DBMS:
+
+```sql
+SELECT Fname, Lname
+FROM EMPLOYEE, PROJECT, WORKS_ON
+WHERE Ssn=Essn AND Pno=Pnumber
+AND Pname=‘ProductX’;
+```
+
+The disadvantage of this approach is that it is inefficient for views defined via complex queries that are time-consuming to execute, especially if multiple queries are going to be applied to the same view within a short period of time.
+
+##### View materialization
+
+Involves physically creating a temporary view table when the view is first queried and keeping that table on the assumption that other queries on the view will follow. In this case, an efficient strategy for automatically updating the view table when the base tables are updated must be developed in order to keep the view up-to-date. Techniques using the concept of incremental update have been developed for this purpose, where the DBMS can determine what
+new tuples must be inserted, deleted, or modified in a materialized view table when a database update is applied to one of the defining base tables. The view is generally kept as a materialized (physically stored) table as long as it is being queried. If the view is not queried for a certain period of time, the system may then automatically remove the physical table and recompute it from scratch when future queries reference the view.
+
+#### Updating views
+
+Updating of views is complicated and can be ambiguous. In general, an update on a view defined on a single table without any aggregate functions can be mapped to an update on the underlying base table under certain conditions. For a view involving joins, an update operation may be mapped to update operations on the underlying base relations in multiple ways. Hence, it is often not possible for the DBMS to determine which of the updates is intended.
+
+In summary, we can make the following observations:
+- A view with a single defining table is updatable if the view attributes contain the primary key of the base relation, as well as all attributes with the NOT NULL constraint that do not have default values specified.
+- Views defined on multiple tables using joins are generally not updatable.
+- Views defined using grouping and aggregate functions are not updatable.
+
+In SQL, the clause **WITH CHECK OPTION** must be added at the end of the view definition if a view is to be updated. This allows the system to check for view updatability and to plan an execution strategy for view updates
+
+It is also possible to define a view table in the FROM clause of an SQL query. This is known as an in-line view. In this case, the view is defined within the query itself
+
+#### Using Triggers for View Updates
+
+A trigger may be defined as INSTEAD OF, intercepting an UPDATE/INSERT/DELETE upon a View....
