@@ -1,5 +1,10 @@
 # Class Exercices
 
-- [1st Practical class - Modulo 1](./01.md)
-- [Exercises series #1 — Transactional Processing](./02.md)
-- [Exercices series #2 - Transactional Processing](./03.md)
+- [1st Practical class - Modulo 1](./responses/01.md)
+- [AP #1](./responses/02.md)
+- [AP #2](./resposes/03.md)
+- [AP #3](./responses/04.md)
+- [AP #4](./responses/05.md)
+- [AP #5](./resposes/06.md)
+- [AP #6](./responses/07.md)
+- [AP #7](./responses/08.md)
