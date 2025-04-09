@@ -2,4 +2,4 @@
 
 - [Class Notes](./class_notes/README.md)
 - [Class Exercices](./class_exercices/README.md)
-- 
+- [Exams](./exams)
