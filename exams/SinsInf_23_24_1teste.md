@@ -25,13 +25,14 @@ Sim, existe possibilidade de rollback encadeado (non-cascadeless) porque:
 
 ## 4. Transações T1 e T2
 
-i) **Valor em T1.13:** 1000 (lê saldo da conta 1111)
-ii) **Valor em T1.14:** Pode ser 2000 ou 1500, dependendo do timing:
-   - Se T2 já tiver feito commit: 1500
-   - Se T2 ainda não tiver feito commit: 2000
-iii) **Efeito de T1.12:** Define o nível de isolamento como READ UNCOMMITTED, permitindo:
+i) **Valor em T1.I3:** 1000 (lê saldo da conta 1111)
+ii) **Valor em T1.I4:** Pode ser 2000 ou 1500, dependendo do SGBD:
+   - Se o SGBD permitir read uncommited: 1500
+   - Se for PostgreSQL: 2000
+iii) **Efeito de T1.I2:** Define o nível de isolamento como READ UNCOMMITTED, permitindo:
    - Ler dados não confirmados (dirty reads)
    - Não garante consistência durante a transação
+    * Nada acontece se o SGBD for PostgreSQL
 
 ## 5. Cursores em PL/pgSQL
 
