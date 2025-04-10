@@ -36,10 +36,10 @@ iii) **Efeito de T1.I2:** Define o nível de isolamento como READ UNCOMMITTED, p
 
 ## 5. Cursores em PL/pgSQL
 
-(a) **True** - Cursors devem ser abertos explicitamente com OPEN
+(a) **False** - Deve-se utilizar o OPEN para ter mais controlo, mas não é obrigatório
 (b) **True** - São usados para processar resultados linha por linha
 (c) **True** - São variáveis que permitem acesso programático a conjuntos de resultados
-(d) **False** - Cursores são apenas para leitura, não podem deletar tuplos diretamente
+(d) **True** - Cursores podem apagar com o DELETE BY
 
 ## 6. Correção da função add
 
