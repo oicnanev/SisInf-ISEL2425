@@ -1562,3 +1562,174 @@ It is also possible to define a view table in the FROM clause of an SQL query. T
 #### Using Triggers for View Updates
 
 A trigger may be defined as INSTEAD OF, intercepting an UPDATE/INSERT/DELETE upon a View....
+
+## Indexing and Execution Plans - 14 April 2025
+
+### Sylabus
+
+1. Advantages and disadvantages of using indexing in DBMS
+2. Describe and correctly use the different types of indexes available
+3. Know the different data structures that support indexing
+4. Understand and describe an SQL statement execution plan
+5. Understand the impact of null columns on indexing
+
+### How is data stored in a Database?
+
+- **Logical Structure** -> Files
+- **Physical Structure** -> Disk (usually)
+	- Database is simply too large to be held in memory (normally)
+	- Provides persistence
+
+- How are the access made?
+	1. **Locate** in disk page(s)/block(s) that holds the target rows
+	2. **Copy** rows to memory
+	3. If there is an insert/update/delete/etc we must **rewrite** row data
+- Storage is composed by **record files**
+    * Each record typically holds a single **tuple** (row) of a **relation** (table)
+    * **Records** may have fixed or variable length
+- Exact format depends on data type and specific database engine
+    * Relational databases also must hold unstructured data (e.g. JSON, images, video, free text, etc)
+        + **BLOBs** (Binary Large Objects), other specific types may also exist, record will have a pointer to another storage disk
+        + Postgres also has **TOAST** (The Oversized-Attribute Storage Technique), to split **data items** (fields) into multiple **tuples** (rows)
+- Since data is spread across files, we must have ways to track where data of each **relation** is
+- Since normal searching implies loading files into memory to check if **tuples** match a **predicate**, it is an expensive operation!
+	- Data structures used to track files must be able to reduce the number of files loaded into memory
+- What is our **access mode** (read vs write mode)? How are files structured on disk?
+
+#### File Structure
+
+##### Heap files (unsorted records)
+
+- The simplest and most basic type of organization
+- Records are placed in the file in order in which they are iserted, new records are added at the end of the file
+- **Advantages**
+    * **Efficient insertion** -> last block on disk is copied to memory, the new record is appended, and the block is rewritten to disk
+- **Disadvantages**
+    * **Slow search** -> linear search over the blocks
+    * Deleting records leads to blocks with holes. We must periodically reorganize the file to recover space
+    * Reading all the records in order of a given field requires a copy to be created
+
+##### Sorted files
+
+- Files are physically **sorted** (in blocks) based on the values of one of the fields (the sort field)
+- **Advantages**
+    * **Efficient search** (for the sort field) -> binary search
+        + Next record operation (in order) is very efficient (for the sort field)
+- **Disadvantages**
+    * **Insertion and delete are expensive operations** -> implies resorting files, creating "space" if required
+
+##### Hash files
+
+- Tuples have their fields hashed with a pointer stored in a map
+    * Tuple[  v  ]    hash(v) -> block address
+- **Advantages**
+    * **Very efficient search** (normally a O(1) operation)
+- **Disadvantages**
+    * Field by field access may be expensive and suffers possible collisions
+
+**What does an index look like?**
+
+- An **index** (also referred to as data access structure) is, normally, just another file with entries such that:
+    * An **index field** (one or more filled in tuples)
+    * A **pointer** to blocks
+- "Wait, but isn't the problem that we must load files into memory?"
+    * Yes, but an index file is much smaller that the set of record files!
+- You use indexes even if you don't realize it, DBs have many auto-generated indexes (e.g., for primary keys)
+
+##### Index types
+
+- Sorted files (single-level)
+    * Primary
+    * Cluster
+    * Secondary
+- Tree-like Data Structures
+    * Multi-level
+    * B-trees
+
+**Primary indexes**
+
+- The most basic type
+- A sorted file whose records have a fixed length with 2 fields:
+    * The 1st field is of the same data type as the sort key field - Primary Key - of the data file
+    * The 2nd field is a pointer (block address)
+- Total number of entries in the index file = number of blocks on disk referenced in the sorted file
+- **Disadvantage** - Inserting and removing records!
+ 
+**Cluster indexes**
+
+- If the records are sorted by a non-key field, their may be repeated fields -> so we cluster this values and point to the first value
+- **Disadvantage**:
+	- Inserting and removing records
+	- The record file must also be sorted
+
+**Secondary indexes**
+
+- Why have just one index?
+- If we need to search by fields that are not primary keys we may create a secondary index
+    * The secondary field may be another key or not, unique or not
+- Handles sorted, unsorted and hashed records
+- May create many indexes optimized for distinct searches (at the cost of storage space)
+- By Elmasri, other popular authors hold distinct definitions!
+
+**Multi-level indexing**
+
+- Reduce the target search space by dividing each file in *n* files in a tree-like structure
+- Generally implemented as **B+ tree** that simplifies insertions/deletion by purposely leaving empty space in each file
+
+**An overview of Tree-like data structures**
+
+- **Balanced data structure**
+- A tree is made up of **nodes**, each node except the **root** has a parent node and **zero or more child nodes**. A node that has no children is called **leaf node**, a non-leaf node is called an **internal node**
+- Of note:
+    * B-tree (1971)
+    * B+ -tree (1973)
+    * B* -tree (1977)
+    * B *link* -tree (1981)
+    * B€ -tree (2003)
+    * BW-tree (2013)
+
+**B+ tree**
+
+- It is ordered, **self-balancing tree data structure** - each leaf node is at the same depth in the tree that allows searches, sequential access, insertions and removals in O(log n) time
+- Generalization of a binary search tree, since a node can have more than 2 children
+- Optimized for systems that read and write large blocks of data
+- Values stored in the nodes:
+	- **Approach 1** -> Just the IDs
+		- Pointers to the location of the tuples
+	- **Approach 2** -> the whole tuple
+		- Each leaf node holds the full tuple, also know as **index structure storage**
+		- Any secondary index will have a pointer to the ID
+		- This is in contrast with the previous B-tree that held tuples on all nodes (more efficient for storage, less for restructuring the tree)
+- When is the index used?
+	- When the WHERE predicate uses any field in the index
+		- E.g., for an index over <a, b, c> these queries would apply:
+			- (a=1 AND b=2 AND c=3)
+			- (a=1 AND b=2)
+			- (b=2), (c=3)
+			
+### Indexes in PostgreSQL
+ 	 	 	 
+- **B-tree** -> whenever a search may have equality searches (BETWEEN, IN, LIKE or ~) or null checking (IS NULL and IS NOT NULL)
+- **Hash** -> only for =
+- Among other types (GIST,...)
+- Index fields may also be computed from other fields
+
+```sql
+CREATE INDEX people_names ON people ((first_name ) || ' ' || (last_name));
+
+SELECT FROM people WHERE (first_name || ' ' || last_name) = 'John Smith'
+``` 
+
+### Execution Plans
+
+- It is still a good idea how our indexes are impacting performance
+    * EXPLAIN [analyze] [verbose] STATEMENT;
+- Command shows the **execution plan** that Postgres has planned for a statement
+    * How tables are referenced by the query will be scanned and, if several tables are referenced, how joins will be done
+    * The estimate cost of execution -> disk page fetches -> initialization cost and total cost
+    * Actual execution time
+- Collects statistics on the distribuition of values in the table and stores the results in the pg_statistics system catalog
+	- ANALYZE [VERBOSE] [table_and_columns [, ...]] WHERE <option>;
+- Without a list of tables and columns, the command processes all the tables and views materialized in the DB for which the user has permission to analyze
+- There is no ANALYZE command in the standard 	 
+
