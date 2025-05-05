@@ -8,3 +8,5 @@
 - [AP #5](./responses/06.md)
 - [AP #6](./responses/07.md)
 - [AP #7](./responses/08.md)
+- [AP #8](./responses/09.md)
+- [Quiz AP #8](./responses/10.md)
