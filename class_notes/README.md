@@ -1733,3 +1733,54 @@ SELECT FROM people WHERE (first_name || ' ' || last_name) = 'John Smith'
 - Without a list of tables and columns, the command processes all the tables and views materialized in the DB for which the user has permission to analyze
 - There is no ANALYZE command in the standard 	 
 
+## Execution Plans - 05 Maio 2025
+
+- Collects statistics on the distribuition of values in the table and stores the results in the **pg_statistics** system catalog
+    * `ANALIZE [VERBOSE] [table_and_columns [,...]] WHERE <option>;`
+- Without a list of tables and columns, the command processes all the tables and views materialized in the DB for which the user has permission to analyze
+- There is no `ANALIZE`command in the standard
+- When we execute a query the optimizer generates an **Execution Plan**
+- We must *'find'* our data. This is performed by **Table Scan Methods**:
+    * **Sequential Scan**: we loop through all entries in a table (`SELECT * FROM Products WHERE stock > 2;`)
+    * **Index Scan**: will use an existing index (`SELECT * FROM Products WHERE stock = 100;`)
+    * **Index Only Scan**: an existing index has all required data (`SELECT stock FROM Products WHERE stock = 100;`)
+    * **Bitmap Scan**: used to merge results from multiples indexes, and/or to filter presumably small sets (`SELECT * FROM Products WHERE id < 200;`)
+        + Bitmap Index Scan creates a map pages with matching entries, and pointers for each entry
+        + Bitmap Heap Scan: a sequential scan of pages marked in Bitmap Index Scan
+    * **TID Scan**: a TID (ctid) is composed by (page_number, tuple_index), a TID Scan allows fast access when the TID is know
+
+### Cactegories / General Scan concepts
+
+#### INDEX UNIQUE SCAN
+
+- if a WHERE clause can be satisfied by a single row (any unique column)
+- We use an **Index (Only) Scan**
+- Ideally, we should have a Hash table
+
+#### INDEX RANGE SCAN
+
+- If multiple rows must be fetched
+- (Almost) Any of the scan methods may be used, depending on how many rows are estimated to satisfy the WHERE clause
+
+### Execution Plans Statistics 
+
+- Postgres keeps detailed statistics regarding index/table usage
+- Of note is `pg_stat_all_tables` -> para ver se estamos a usar os indexes ou não.
+- And also `pg_stat_all_indexes`
+- Before version 8.3 Postgres did not includes NULLS in indexes by default (this happens in other DBMS), so we were forced to create partial indexes with the clause **IS NULL**
+- But now it does
+
+#### `pg_stat_all_tables`
+
+- `seq_scan bigint` Number of sequential scans initiated on this table
+- `last_seq_scan timestamp with time zone` The time of the last sequential scan on this table, based on the most recent transaction stop time
+- `seq_tup_read bigint` Number of live rows fetched by sequential scans
+- `idx_scan bigint` Number of index scans initiated on this table
+- `last_idx_scan timestamp with time zone` The time of the last index scan on this table, based on the most recent transaction stop time
+- `idx_tup_fetch bigint` Number of live rows fetched by index scans
+
+#### `pg_stat_all_indexes`
+
+- `indexrelname name` Name of this index
+- `idx_scan bigint` Number of index scans initiated on this index
+
