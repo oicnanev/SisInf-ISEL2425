@@ -1784,3 +1784,213 @@ SELECT FROM people WHERE (first_name || ' ' || last_name) = 'John Smith'
 - `indexrelname name` Name of this index
 - `idx_scan bigint` Number of index scans initiated on this index
 
+## Module 5 - JPA (12MAI2025)
+
+### Readings
+- A classification of Object-Relational Impedance Mismatch
+- Lukas Jungmann et al - Pro Jakarta Precist - An In-Depth guide to Persistence in Enterprise - Ch.2
+
+### Topics
+- JPA:
+    * Entities
+    * Entity Manager
+    * Query
+    * Relationship
+- Design Patterns
+
+#### Entity
+- The concept of an entity is old, and comes from the Entity-Relationship (ER) model
+- In the context of JPA we mean a Java object that represents some state in a given table
+- As expected, it may participate in any number of relationships
+- What makes an entity an entity?
+	- **Persistence** - it may be stored in DB (or another persistence store), but this is an application decision
+	- **Identity** - it (most of the time) has a unique identify (the primary key of the DB). NOTE: this forces us to use work arounds when dealing with some views
+	-   **Transactionality** - it is expected that operations over entities are done in the context of a transaction, therefore are atomic
+	- **Granularity** - small well-defined granularity, typically a single row in a table with optional connections to other entities
+
+##### Metadata
+- In order to use entities, we require more metadata (e.g. the name of the associated table)
+- Metadata may be provided through two methods: Annotations or XML configuration
+ 
+##### Persistence
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<persistence version="2.1"
+	xmlns="http://xmlns.jcp.org/xml/ns/persistence"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://xmlns.jcp.org/xml/ns/persistence http://xmlns.jcp.org/xml/ns/persistence/persistence_2_1.xsd">
+	<persistence-unit name="JPADemo" transaction-type="RESOURCE_LOCAL">
+		<class>com.jcg.jpa.demo.Farmer</class>
+		<properties>
+			<property name="javax.persistence.jdbc.driver" value="com.mysql.jdbc.Driver" />
+			<property name="javax.persistence.jdbc.url" value="jdbc:mysql://localhost:3306/jpaDemoDb" />
+			<property name="javax.persistence.jdbc.user" value="root" />
+			<property name="javax.persistence.jdbc.password" value="" />
+		</properties>
+	</persistence-unit>
+</persistence>
+```
+
+> Nota: copiar para o trabalho o ficheiro da AP#10
+
+##### Entities
+1. Be annotated with `jakarta.persistence.Entity`
+2. Must have a field annotated with `@Id`
+3. At least one **public or protected no-argument constructor**
+4. Must **not be declared final** (therefore, no methods or persistence instance variables can be declared final)
+5. Must implement the **Serializable** interface
+6. May extend **both entity and non-entity** classes, and **non-entity** classes may **extend entity** classes
+7. Persistence instances **variables must** be declared private, protected or package-private
+
+```java
+@Entity
+public class Employee {
+	@Id
+	private int id;
+	private String name;
+	private long salary;
+
+	public Employee() {}
+	public Employee(int id) { this.id = id }
+
+	public int getId() { return id; }
+	public void setId(int id) { this.id = id }
+	public String getname() { return name; }
+	public void setname(String name) { this.name = name; }
+	public long getSalary() { return salary; }
+	public void setSalary(long salary) { this.salary = salary }
+}
+```
+
+#### Entity Manager
+- So, we got entities... now what?
+    * The entity, by itself, is just a Java object with some metadata
+    * We use an **EntityManager**!
+- An entity manager has a "Persistance context":
+    * Collection of "unique" entities associated with a database connection
+- JPA provides particular implementations of the `EntityManager` through `EntityManagerFactory(s)`
+  
+| Object | API Object | Description |
+| ------ | ---------- | ----------- |
+| Persistence | Persistence | Bootstrap class used to obtain an entity manager factory |
+| Entity Manager Factory | EntityManagerFactory | Configured factory object used to obtain entity managers |
+| Pesristence Unit | --- | Named confgiuration declaring the entity classes and data store info |
+| Entity Manager | EnttiyManager | Main API object used to perfmro operations and queries on entities |
+| Persistence Context | --- | Set of all entity instances managed by a specific entity manager |
+
+![Entity Manager](./img/23.png)
+
+```java
+EntityManagerFactory emf = Persistence.createEntityManagerFactory("EmployeeService");
+
+EntityManager em = emf.createEnttiyManager();
+```
+
+##### Common Operations 
+
+**Create**
+
+```java
+Employee emp = new Employee(158);  // id = 158
+em.persist(emp);  // INSERT... para UPDATE usar emp.merge(emp)
+
+public Employee createEmployee(int id, String name, long salary) {
+	emp = new Employee(id);
+	emp.setName(name);
+	emp.setSalary(salary);
+
+	emp.persist(emp);
+
+	return emp;
+}
+```
+
+**Search**
+
+```java
+// Simple search
+Employee emp = em.find(Employee.class, 158);
+
+// Another funny method
+public Empolyee findEmployee(int id) {
+	return em.find(Employee.class, id);
+}
+```
+
+**Update**
+
+```java
+Employee emp = em.find(Employee.class, 158);
+emp.setSalary(emp.getSalary() + 1000);
+
+public Employee raiseEmployeeSalary(int id, long raise) {
+	Employee emp = em.find(Employee.class, id);
+	if (emp != null) {
+		emp.seStalary(emp.getSalary() + raise);
+	}
+	return emp;
+}
+```
+
+**Delete**
+
+```java
+Employee emp = em.fidn(Employee.class, 158);
+em.remove(emp);
+
+public vodi removeEmployee(int id) {
+	Empolyee emp = em.find(Employee.class, id)
+	if (emp != null) {
+		em.remove(emp);
+	}
+}
+```
+
+##### Transactions
+
+**EntityTransaction**
+
+```java
+em.getTransaction().begin();
+createEmployee(158, "John Doe", 4500.00);
+em.getTransaction().commit();
+```
+
+**Queries**
+
+```java
+TypedQuery<Employee> query = em.createQuery("SELECT e FROM Employee e", Employee.class);
+List<Employee> employees = query.getResultList();
+// or
+TypedQuery<Employee> query = em.createQuery("SELECT e FROM Employee e", Employee.class);
+Stream<Employee> employeeStream = query.getResultStream();
+```
+
+**Named Queries**
+
+```java
+// Entidade Student com Named Queries
+@Entity
+@NamedQueries({
+    @NamedQuery(
+        name = "Student.findByKey",
+        query = "SELECT s FROM Student s WHERE s.studentNumber = :key"
+    ),
+    @NamedQuery(
+        name = "Student.EnrolledInCourse",
+        query = "SELECT s FROM Student s WHERE s.courseId = :key"
+    )
+})
+public class Student {
+    // Atributos da entidade...
+}
+
+// Método de serviço/repositório
+public Collection<Student> getEnrolledStudents(Course c) {
+    return _em.createNamedQuery("Student.EnrolledInCourse", Student.class)
+              .setParameter("key", c.getCourseId())  
+              .getResultList();
+}
+```
+
