@@ -1994,3 +1994,165 @@ public Collection<Student> getEnrolledStudents(Course c) {
 }
 ```
 
+
+## JPA (continuation) - 19Mai2025
+
+### Named Stored Procedures
+
+> TODO
+
+### Result Set Mapping
+
+> TODO
+
+### Relationships
+
+`@ManyToOne(cascade=CascadeType.PERSIST, fetch=FetchType.LAZY)`
+
+`@JoinColumn(name="country", referencedColumnName="countryId"`
+
+> TODO
+
+### Relationship Mapping
+
+> TODO
+
+### Optimistic Locking
+
+- JPA supports optimistic techniques to check for data changes when flushung data
+- This is recomended if we use _detached_ entities
+	+ And are using `READ_COMMITED` isolation
+- If a change is _detached_ it throws a `OptimisticLockException`
+	+ __Atenção__ -> só lança no final da transação total... temos de usar bloco `try... catch` para capturar a excepção
+- To support this we use a versioning system
+	+ The entity most have a version field that is checked and incremented each update
+	+ `@Version private int version;` -> usar nas entidades (por exemplo __Trip__), depois temos de ir a um local no código, apanhar a excepção e mostrar uma mensagem ao utilizador
+- `@Version` may be used with `int`, `short`, `long`, and `timestamp`
+	+ using `int` is semsible default
+- __Note__: support for versio depends a lot on the implementation
+	+ It may not be guaranteed that the field is always updated
+	
+> TODO: faltam coisas
+
+- We have:
+	+ `EntityManager.Lock()` -> will lock the entity in the persistence context
+	+ `Query.setLockMode()` -> sets the lock mode to be in effect during a query (assumes that the transaction context exists)
+	
+#### `LockModeType.OPTIMISTIC`
+
++ only one transaction may succed to change an entity
++ what actually happens depends on the implementation
+	
+```java
+  protected long totalSalaryInDepartment(int deptId) {
+  	long total = 0;
+  	Department dept = em.find(Depart.class, deptId);
+  	for (Employee emp: dept.getEmployees()) {
+  		em.lock(em, lockModeType.OPTIMISTIC);
+  		total += emp.getSalary/();
+  	}
+  	return total;
+  }
+``` 
+ 
+ > __NOTA__: Não usar locks quando se carrega dados para a memória e depois se manipulam  
+ Locks Optimistas só são úteis em entidades desligadas do `EntityManager`, __"detached"__ - como deixam de representar os dados da tabela podemos comparar o estado anterior com o estado atual
+ 
+ #### LockModeType.OPTIMISTIC_FORCE_INCREMENT
+ 
+ - In essence a write lock
+ - At the end of the transaction the version will be always incremented  
+ 
+```java
+public void addUniform(int id, Uniform uniform) {
+	Employee emp = em.find(Employee.class, id);
+	em.lock(emp, LockModeType.OPTIMISTIC_FORCE_INCREASE)
+	emp.addUniform(uniform);
+	uniform.setEmployee(emp)
+}
+``` 
+
+> No trabalho um exemplo será, criar trotineta nova e associar uma estação
+
+#### Pessimistic Locks
+
+> faz mesmo na BD
+
+- We can also have explicit locking controil in addition to using higher isolation
+- `LockModeType.PESSIMISTIC_WRITE`
+- `LockModeType.PESSIMISTIC_READ`
+- `LockModeType.PESSIMISTIC_FORCE_INCREASE`
+- Behavior may be further be fine-tunned with timouts
+-  __TODO__ ...
+
+## Design Paterns - 22Mai2025
+
+> No trabalho usar __VirtualProxy__
+
+### DataMapper
+
+- provided implicitly by JPA (Entity + EntityManager), but...
+
+```java
+@Overide Collection<Course>
+
+create
+
+update
+
+delete
+
+// TODO
+```
+
+### Repository
+
+- must be implemented, but mapping is already given (DataMapper)
+- vista sobre os dados como se fossem objectos
+- padrões de acesso complexos e/ou baseados em `Collection`
+
+### UnitOfWork
+
+- Exists implicitly in JPA and mapping is already given (DataMapper)
+- All chnages are `stored` in local `PersistenceContext` and then commited
+- We can also see this behavior when cascading changes in a collection
+	+ use `cascade=CascadeType.PERSIST`
+	
+### QueryObject
+
+- Not implemented directly, but JPQL gives us the tools to do so
+- example: `SELECT c FROM Country c WHERE ...` -> aqui `Country` não é a tabela, é um objecto
+
+### LazyLoad
+
+- Implemented by JPA, but often must be used explicitly
+	+ `fetch = FetchType.LAZY`
+- __many to many__ normalmente é __lazy__
+- __one to one__ normalmente é __eager__
+
+### IdentityMap
+
+- Implemented by JPA, remember "all" entities in the `PersistentContext` have a unique identity and may be held in a single transaction
+
+> Para forçar o `update` usar `refresh` ao EntityManager 
+
+### ValueObject
+
+- Small self-contained domaqin class whose equality is not based on `identity` but the actual value of the object
+- Generally flat mapped to columns in the same object (eg. email, phone number, money, etc)
+- In JPA we have:
+	+ __Simple value object__: one column -> use an `AttributeConverter`
+	+ __Complex value object__: multiple columns -> use an `@Embeded`
+	
+### Some questions
+
+__Uma Entity deve sempre:__
+
+- Usar anotação `@Id`
+	+  False, pode também usar a anotação `@EmbededId`
+-  É obrigatório usar `@Table`na classe
+	+  False
+-  Mapear uma única tabela
+	+  True
+-  Usar `@JoinColumn` para mapear colunas do tipo `JSONB`
+	+  False, `@JoinColumn` é usado para referir chaves estrangeiras
